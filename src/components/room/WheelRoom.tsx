@@ -203,11 +203,6 @@ export function WheelRoom({ code }: { code: string }) {
 
         {!isCompleted && (
           <div className="flex w-full max-w-md flex-col items-center gap-3">
-            {participant && (
-              <p className="text-sm text-gray-600">
-                Spinning as <span className="font-semibold text-gray-900">{participant.name}</span>
-              </p>
-            )}
             <SpinButton
               onClick={() => {
                 setDialogError(null);

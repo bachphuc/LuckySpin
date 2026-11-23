@@ -60,6 +60,7 @@ test("shared wheel: two participants, refresh, live updates and completion", asy
   const dialog = alice.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "Welcome to Lucky Draw - November" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Spin" })).toBeDisabled();
+  await expect(alice.getByRole("banner").getByText(/Welcome/)).toHaveCount(0);
   await dialog.getByPlaceholder("Your name").fill("   ");
   await expect(dialog.getByRole("button", { name: "Spin" })).toBeDisabled();
   await joinAndSpin(alice, "Alice");
@@ -73,6 +74,8 @@ test("shared wheel: two participants, refresh, live updates and completion", asy
   await alice.reload({ waitUntil: "networkidle" });
   await expect(alice.getByText(`You already spun and won ${aliceWon}.`)).toBeVisible();
   await expect(alice.getByRole("dialog")).toHaveCount(0);
+  await expect(alice.getByRole("banner")).toContainText("Welcome Alice");
+  await expect(alice.getByText(/Spinning as/)).toHaveCount(0);
   await expect(alice.getByRole("button", { name: "Already spun" })).toBeDisabled();
 
   // A second participant in a separate browser context sees Alice's result.
@@ -170,6 +173,9 @@ test("join dialog: stored participant who has not spun gets the dialog prefilled
   await page.reload({ waitUntil: "networkidle" });
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByPlaceholder("Your name")).toHaveValue("Remy");
+  // Stored identity is still valid, so the toolbar greets them even before they spin again.
+  await expect(page.getByRole("banner")).toContainText("Welcome Remy");
   await dialog.getByRole("button", { name: "Spin" }).click();
   await expect(page.getByText(/Congratulations, Remy!/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("banner")).toContainText("Welcome Remy");
 });

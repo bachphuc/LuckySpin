@@ -28,9 +28,17 @@ test("mobile: home and shared page fit the viewport and spin works", async ({ pa
   expect(spinBox.height).toBeGreaterThanOrEqual(48);
   await page.screenshot({ path: "test-results/mobile-dialog.png" });
 
-  await dialog.getByPlaceholder("Your name").fill("Mia");
+  const longName = "Maximiliana Wolfeschlegelsteinhausen-X";
+  await dialog.getByPlaceholder("Your name").fill(longName);
   await dialog.getByRole("button", { name: "Spin" }).tap();
   await expect(dialog).toBeHidden();
-  await expect(page.getByText(/Congratulations, Mia! You won (One|Two|Three)\./)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Congratulations, Maximiliana Wolfeschlegelsteinhausen-X! You won (One|Two|Three)\./)).toBeVisible({ timeout: 15_000 });
+  // Toolbar greeting stays on one line inside the viewport, even for a long name.
+  const welcome = page.getByRole("banner").getByText(/Welcome/);
+  await expect(welcome).toBeVisible();
+  const box = (await welcome.boundingBox())!;
+  expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect(box.height).toBeLessThan(30);
+  expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ path: "test-results/mobile-shared.png", fullPage: true });
 });

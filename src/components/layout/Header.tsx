@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import { HeaderWelcome } from "./HeaderWelcome";
 
 export function Header() {
   return (
     <header className="border-b border-gray-200 bg-white/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex shrink-0 items-center gap-2">
           <svg viewBox="0 0 32 32" className="h-8 w-8" aria-hidden>
             <circle cx="16" cy="16" r="15" fill="#6366f1" />
             <path d="M16 16 L16 1 A15 15 0 0 1 29 8.5 Z" fill="#f97316" />
@@ -14,6 +16,9 @@ export function Header() {
           </svg>
           <span className="text-xl font-extrabold tracking-tight text-gray-900">LuckySpin</span>
         </Link>
+        <Suspense fallback={null}>
+          <HeaderWelcome />
+        </Suspense>
       </div>
     </header>
   );
