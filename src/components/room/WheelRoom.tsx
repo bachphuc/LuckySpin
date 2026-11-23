@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ParticipantForm } from "@/components/participants/ParticipantForm";
+import { JoinSpinDialog } from "@/components/participants/JoinSpinDialog";
 import { ParticipantList } from "@/components/participants/ParticipantList";
 import { ResultList } from "@/components/results/ResultList";
 import { SpinButton } from "@/components/wheel/SpinButton";
@@ -18,7 +18,6 @@ interface JustWon {
   itemLabel: string;
 }
 
-const MIN_FREE_SPIN_MS = 900;
 /** Keep the landed wheel (winner under the pointer) on screen briefly before showing live items. */
 const RESULT_HOLD_MS = 4000;
 
@@ -30,7 +29,11 @@ export function WheelRoom({ code }: { code: string }) {
   const [isSpinning, setIsSpinning] = useState(false);
   const [spinItems, setSpinItems] = useState<WheelItem[] | null>(null);
   const [justWon, setJustWon] = useState<JustWon | null>(null);
-  const [editingName, setEditingName] = useState(false);
+  /** Spin request in flight from the dialog (before the animation starts). */
+  const [spinPending, setSpinPending] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  /** User chose to only watch; the dialog reopens from the main Spin button. */
+  const [watching, setWatching] = useState(false);
   const { participant, saveParticipant } = useParticipant(code);
 
   const wheelRef = useRef<WheelHandle>(null);
@@ -88,41 +91,54 @@ export function WheelRoom({ code }: { code: string }) {
   const myResult =
     participant && wheel ? wheel.results.find((r) => r.participantId === participant.participantId) : undefined;
   const isCompleted = wheel?.status === "COMPLETED";
-  const canSpin = Boolean(wheel && participant && !myResult && !isCompleted && !isSpinning && !editingName);
+  const showDialog = Boolean(
+    wheel && !isCompleted && !myResult && !justWon && !isSpinning && !watching,
+  );
 
-  async function handleSpin() {
-    if (!wheel || !participant || spinningRef.current || myResult || isCompleted) return;
-    spinningRef.current = true;
+  /**
+   * Spin from the join dialog: save the name (reusing any stored participantId),
+   * call the existing spin API, and only then close the dialog and animate the
+   * wheel onto the item the backend chose.
+   */
+  async function handleDialogSpin(name: string) {
+    if (!wheel || spinningRef.current) return;
+    const me = saveParticipant(name);
+    spinningRef.current = true; // also pauses polling so the wheel can't change under us
     if (holdTimer.current) clearTimeout(holdTimer.current);
-    // Freeze the wheel's segments for the whole animation so polling can't reshuffle them.
     const frozen = wheel.items;
     setSpinItems(frozen);
-    setIsSpinning(true);
+    setSpinPending(true);
+    setDialogError(null);
     setError(null);
     setJustWon(null);
-    wheelRef.current?.start();
 
+    let data;
     try {
-      const [data] = await Promise.all([
-        spinWheel(code, {
-          participantId: participant.participantId,
-          participantName: participant.name,
-          requestId: newUuid(),
-        }),
-        new Promise((r) => setTimeout(r, MIN_FREE_SPIN_MS)),
-      ]);
+      data = await spinWheel(code, {
+        participantId: me.participantId,
+        participantName: me.name,
+        requestId: newUuid(),
+      });
+    } catch (err) {
+      // Keep the dialog open with the name intact; no fake result.
+      spinningRef.current = false;
+      setSpinItems(null);
+      setSpinPending(false);
+      setDialogError(err instanceof ApiClientError ? err.message : "Spin failed. Please try again.");
+      await refresh({ force: true }); // e.g. already spun / completed: the page state catches up
+      return;
+    }
+
+    setSpinPending(false);
+    setIsSpinning(true); // closes the dialog
+    try {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
       const index = frozen.findIndex((i) => i.id === data.result.itemId);
       if (index >= 0) {
         await wheelRef.current?.stopAt(index);
-      } else {
-        wheelRef.current?.cancel();
       }
       setJustWon({ participantName: data.result.participantName, itemLabel: data.result.itemLabel });
       holdTimer.current = setTimeout(() => setSpinItems(null), RESULT_HOLD_MS);
-    } catch (err) {
-      wheelRef.current?.cancel();
-      setSpinItems(null);
-      setError(err instanceof ApiClientError ? err.message : "Spin failed. Please try again.");
     } finally {
       spinningRef.current = false;
       setIsSpinning(false);
@@ -185,43 +201,24 @@ export function WheelRoom({ code }: { code: string }) {
           )}
         </div>
 
-        <div className="flex w-full max-w-md flex-col items-center gap-3">
-          {!participant || editingName ? (
-            !isCompleted &&
-            !myResult && (
-              <ParticipantForm
-                initialName={participant?.name}
-                onSubmit={(name) => {
-                  saveParticipant(name);
-                  setEditingName(false);
-                }}
-                onCancel={participant ? () => setEditingName(false) : undefined}
-              />
-            )
-          ) : (
-            <>
+        {!isCompleted && (
+          <div className="flex w-full max-w-md flex-col items-center gap-3">
+            {participant && (
               <p className="text-sm text-gray-600">
                 Spinning as <span className="font-semibold text-gray-900">{participant.name}</span>
-                {!myResult && !isSpinning && !isCompleted && (
-                  <button
-                    onClick={() => setEditingName(true)}
-                    className="ml-2 text-indigo-600 underline-offset-2 hover:underline"
-                  >
-                    change
-                  </button>
-                )}
               </p>
-              {!isCompleted && (
-                <SpinButton
-                  onClick={handleSpin}
-                  disabled={!canSpin}
-                  spinning={isSpinning}
-                  label={myResult ? "Already spun" : "Spin"}
-                />
-              )}
-            </>
-          )}
-        </div>
+            )}
+            <SpinButton
+              onClick={() => {
+                setDialogError(null);
+                setWatching(false);
+              }}
+              disabled={Boolean(myResult) || showDialog}
+              spinning={isSpinning || spinPending}
+              label={myResult ? "Already spun" : participant ? "Spin" : "Join & spin"}
+            />
+          </div>
+        )}
       </section>
 
       <aside className="flex flex-col gap-6">
@@ -247,6 +244,17 @@ export function WheelRoom({ code }: { code: string }) {
           )}
         </section>
       </aside>
+      {showDialog && (
+        <JoinSpinDialog
+          wheelName={wheel.name}
+          remainingItems={wheel.remainingItems}
+          initialName={participant?.name}
+          pending={spinPending}
+          error={dialogError}
+          onSpin={handleDialogSpin}
+          onDismiss={() => setWatching(true)}
+        />
+      )}
     </div>
   );
 }

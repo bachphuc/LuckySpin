@@ -55,7 +55,7 @@ export function useParticipant(code: string) {
   );
 
   const save = useCallback(
-    (name: string) => {
+    (name: string): StoredParticipant => {
       const existing = read(code);
       const next: StoredParticipant = {
         participantId: existing?.participantId ?? newUuid(),
@@ -68,6 +68,7 @@ export function useParticipant(code: string) {
         cache.set(code, { raw: JSON.stringify(next), value: next });
       }
       listeners.forEach((l) => l());
+      return next;
     },
     [code],
   );
