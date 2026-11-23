@@ -1,0 +1,26 @@
+import type { ApiErrorCode } from "@/types/wheel";
+
+/** Expected, client-safe error. Anything else is reported as a generic 500. */
+export class AppError extends Error {
+  constructor(
+    public readonly code: ApiErrorCode,
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "AppError";
+  }
+}
+
+export const Errors = {
+  invalidRequest: (message = "Invalid request.") => new AppError("INVALID_REQUEST", message, 400),
+  wheelNotFound: () => new AppError("WHEEL_NOT_FOUND", "Wheel not found.", 404),
+  wheelCompleted: () => new AppError("WHEEL_COMPLETED", "This wheel has no remaining items.", 409),
+  alreadySpun: () =>
+    new AppError("PARTICIPANT_ALREADY_SPUN", "You have already spun this wheel.", 409),
+  noItems: () => new AppError("NO_ITEMS_AVAILABLE", "No items are available to spin.", 409),
+  spinConflict: () =>
+    new AppError("SPIN_CONFLICT", "The wheel is busy. Please try again.", 409),
+  rateLimited: () =>
+    new AppError("RATE_LIMITED", "Too many requests. Please slow down and try again.", 429),
+};
