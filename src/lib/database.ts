@@ -1,8 +1,12 @@
 import "server-only";
-import type { Collection, Db } from "mongodb";
+import { MongoServerError, type Collection, type Db } from "mongodb";
 import { RATE_LIMITS_COLLECTION, WHEELS_COLLECTION } from "@/constants/wheel";
 import { getMongoClient } from "@/lib/mongodb";
 import type { WheelDocument } from "@/types/wheel";
+
+export function isDuplicateKeyError(error: unknown): boolean {
+  return error instanceof MongoServerError && error.code === 11000;
+}
 
 export interface RateLimitDocument {
   _id: string;

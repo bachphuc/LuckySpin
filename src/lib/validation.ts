@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  MAX_OWNER_PASSWORD_LENGTH,
+  MIN_OWNER_PASSWORD_LENGTH,
   MAX_ITEMS,
   MAX_ITEM_LENGTH,
   MAX_PARTICIPANT_NAME_LENGTH,
@@ -32,10 +34,65 @@ export const itemsSchema = z
       .max(MAX_ITEMS, `Enter at most ${MAX_ITEMS} items.`),
   );
 
-export const createWheelSchema = z.object({
-  name: wheelNameSchema,
-  items: itemsSchema,
-});
+/** Passwords are never trimmed or otherwise modified. */
+export const ownerPasswordSchema = z
+  .string({ error: "Owner password is required." })
+  .min(MIN_OWNER_PASSWORD_LENGTH, `Password must be at least ${MIN_OWNER_PASSWORD_LENGTH} characters.`)
+  .max(MAX_OWNER_PASSWORD_LENGTH, `Password must be at most ${MAX_OWNER_PASSWORD_LENGTH} characters.`)
+  .refine(
+    (pw) => new TextEncoder().encode(pw).length <= MAX_OWNER_PASSWORD_LENGTH,
+    `Password is too long (max ${MAX_OWNER_PASSWORD_LENGTH} bytes; some characters count as more than one).`,
+  );
+
+/** For verification we only need "some string"; the hash comparison decides. */
+const ownerPasswordInputSchema = z
+  .string({ error: "Owner password is required." })
+  .min(1, "Owner password is required.")
+  .max(256, "Incorrect owner password.");
+
+export const createWheelSchema = z
+  .object({
+    name: wheelNameSchema,
+    items: itemsSchema,
+    ownerPassword: ownerPasswordSchema,
+    confirmPassword: z.string({ error: "Please confirm the password." }),
+  })
+  .refine((v) => v.ownerPassword === v.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
+
+export const itemLabelSchema = z
+  .string({ error: "Item label is required." })
+  .trim()
+  .min(1, "Item label can't be empty.")
+  .max(MAX_ITEM_LENGTH, `Each item must be at most ${MAX_ITEM_LENGTH} characters.`);
+
+const itemIdSchema = z.string().min(1).max(100);
+
+export const updateWheelSchema = z
+  .object({
+    ownerPassword: ownerPasswordInputSchema,
+    name: wheelNameSchema.optional(),
+    addItems: z.array(itemLabelSchema).max(MAX_ITEMS).optional(),
+    updateItems: z.array(z.object({ id: itemIdSchema, label: itemLabelSchema })).max(MAX_ITEMS).optional(),
+    removeItemIds: z.array(itemIdSchema).max(MAX_ITEMS).optional(),
+  })
+  .refine(
+    (v) =>
+      v.name !== undefined ||
+      Boolean(v.addItems?.length || v.updateItems?.length || v.removeItemIds?.length),
+    { message: "Nothing to update." },
+  )
+  .refine(
+    (v) => {
+      const ids = [...(v.updateItems ?? []).map((u) => u.id), ...(v.removeItemIds ?? [])];
+      return new Set(ids).size === ids.length;
+    },
+    { message: "Each item can only be changed once per request." },
+  );
+
+export const ownerAuthSchema = z.object({ ownerPassword: ownerPasswordInputSchema });
 
 export const participantNameSchema = z
   .string({ error: "Name is required." })
@@ -52,6 +109,7 @@ export const spinRequestSchema = z.object({
 export const shareCodeSchema = z.string().regex(SHARE_CODE_PATTERN);
 
 export type CreateWheelInput = z.infer<typeof createWheelSchema>;
+export type UpdateWheelInput = z.infer<typeof updateWheelSchema>;
 export type SpinRequestInput = z.infer<typeof spinRequestSchema>;
 
 /** First human-readable message from a Zod error. */

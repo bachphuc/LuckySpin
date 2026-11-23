@@ -38,8 +38,21 @@ The first test run downloads a MongoDB binary for `mongodb-memory-server`. To ru
 | `POST` | `/api/wheels` | `{ name, items[] }` → `{ code, name, status, shareUrl }` (201) |
 | `GET` | `/api/wheels/[code]` | Public wheel: items, participants, results, counts |
 | `POST` | `/api/wheels/[code]/spin` | `{ participantId, participantName, requestId }` → awarded result |
+| `PATCH` | `/api/wheels/[code]` | Owner. `{ ownerPassword, name?, addItems?, updateItems?: [{id,label}], removeItemIds? }` → public wheel |
+| `DELETE` | `/api/wheels/[code]/results/[requestId]` | Owner. `{ ownerPassword }` → `{ removedResult, remainingItems, status }` |
 
-Errors use the shape `{ success: false, error: { code, message } }`. The codes are `INVALID_REQUEST` (400), `WHEEL_NOT_FOUND` (404), `WHEEL_COMPLETED` / `PARTICIPANT_ALREADY_SPUN` / `SPIN_CONFLICT` (409), `RATE_LIMITED` (429) and `INTERNAL_SERVER_ERROR` (500).
+Creating a wheel also needs `ownerPassword` and `confirmPassword` (8–72 characters, never trimmed).
+
+Errors use the shape `{ success: false, error: { code, message } }`. The codes are `INVALID_REQUEST` (400), `WHEEL_NOT_FOUND` (404), `WHEEL_COMPLETED` / `PARTICIPANT_ALREADY_SPUN` / `SPIN_CONFLICT` (409), `RATE_LIMITED` (429) and `INTERNAL_SERVER_ERROR` (500). Owner endpoints add `INVALID_OWNER_PASSWORD` (401), `OWNER_NOT_CONFIGURED` (403, legacy wheel), `RESULT_NOT_FOUND` (404) and `ITEM_NOT_AVAILABLE` (409, the item was already awarded).
+
+## Owner management
+
+- The password is hashed with bcryptjs (cost 12), and only `ownerPasswordHash` is stored. No API returns the hash, and the password is never logged or kept in browser storage. It's sent with every management request, so there's no login session.
+- bcrypt only reads the first 72 **bytes** of a password. The 72 limit is therefore checked in UTF-8 bytes as well as characters, so a password with accented or emoji characters can't silently lose its end.
+- **Brute-force protection:** after 10 failed passwords per IP per wheel in 15 minutes, or 50 per wheel in total, further attempts get 429. Successful attempts don't count toward the limit.
+- **Editing items:** edits apply only to available items, in one atomic update. The update re-checks that every edited or removed item is still available, so a spin can't award an item while it's being edited. Adding items to a completed wheel re-opens it, and removing the last item completes it.
+- **Removing a spin:** one atomic update drops the result and that participant, puts the item back (only if it isn't there already) and re-opens the wheel. The participant can then spin again with the same identity.
+- **Legacy wheels:** wheels created before owner management have no password hash. They can still be spun, but they can't be managed (403), and the UI hides the owner link for them.
 
 ## How a spin stays concurrency-safe
 

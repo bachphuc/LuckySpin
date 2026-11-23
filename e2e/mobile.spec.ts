@@ -9,6 +9,8 @@ test("mobile: home and shared page fit the viewport and spin works", async ({ pa
   await page.getByLabel("Items (one per line)").fill("One\nTwo\nThree");
   await page.getByRole("button", { name: "Share" }).click();
   await page.getByLabel("Wheel name").fill("Mobile wheel");
+  await page.getByLabel("Owner password", { exact: true }).fill("mobile-pass-1");
+  await page.getByLabel("Confirm password").fill("mobile-pass-1");
   await page.getByRole("button", { name: "Create share link" }).click();
   const url = await page.locator("#share-url").inputValue();
 
@@ -41,4 +43,14 @@ test("mobile: home and shared page fit the viewport and spin works", async ({ pa
   expect(box.height).toBeLessThan(30);
   expect(await noHorizontalScroll()).toBe(true);
   await page.screenshot({ path: "test-results/mobile-shared.png", fullPage: true });
+
+  // Owner panel fits a phone screen.
+  await page.getByRole("button", { name: "Owner management" }).click();
+  const panel = page.getByRole("dialog", { name: "Owner management" });
+  const pbox = (await panel.locator("> div").boundingBox())!;
+  expect(pbox.y).toBeGreaterThanOrEqual(0);
+  expect(pbox.y + pbox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  expect(pbox.x + pbox.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await expect(panel.getByRole("button", { name: "Save changes" })).toBeInViewport();
+  await page.screenshot({ path: "test-results/mobile-owner.png" });
 });

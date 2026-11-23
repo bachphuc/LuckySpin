@@ -2,11 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
 
+const OWNER_PW = "owner-pass-123";
+
 async function createSharedWheel(page: Page, items: string, name: string): Promise<string> {
   await page.goto("/", { waitUntil: "networkidle" });
   await page.getByLabel("Items (one per line)").fill(items);
   await page.getByRole("button", { name: "Share" }).click();
   await page.getByLabel("Wheel name").fill(name);
+  await page.getByLabel("Owner password", { exact: true }).fill(OWNER_PW);
+  await page.getByLabel("Confirm password").fill(OWNER_PW);
   await page.getByRole("button", { name: "Create share link" }).click();
   const url = await page.locator("#share-url").inputValue();
   expect(url).toMatch(/\/w\/[A-Za-z0-9]{10}$/);
@@ -178,4 +182,86 @@ test("join dialog: stored participant who has not spun gets the dialog prefilled
   await dialog.getByRole("button", { name: "Spin" }).click();
   await expect(page.getByText(/Congratulations, Remy!/)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("banner")).toContainText("Welcome Remy");
+});
+
+test("share: password is required and must match", async ({ page }) => {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "Share" }).click();
+  await page.getByLabel("Wheel name").fill("PW wheel");
+  await page.getByLabel("Owner password", { exact: true }).fill("short");
+  await page.getByLabel("Confirm password").fill("short");
+  await page.getByRole("button", { name: "Create share link" }).click();
+  await expect(page.getByRole("dialog").getByText("Password must be at least 8 characters.")).toBeVisible();
+  await page.getByLabel("Owner password", { exact: true }).fill("longenough1");
+  await page.getByLabel("Confirm password").fill("longenough2");
+  await page.getByRole("button", { name: "Create share link" }).click();
+  await expect(page.getByRole("dialog").getByText("Passwords do not match.")).toBeVisible();
+});
+
+test("owner: edit wheel, manage items, remove a spin and let the participant spin again", async ({ browser }) => {
+  const owner = await browser.newPage();
+  const url = await createSharedWheel(owner, "Apple\nApple\nBanana", "Owner wheel");
+
+  // Participant spins first, in a separate browser context.
+  const guestCtx = await browser.newContext();
+  const guest = await guestCtx.newPage();
+  await guest.goto(url, { waitUntil: "networkidle" });
+  await joinAndSpin(guest, "Gina");
+  const won = guest.getByText(/Congratulations, Gina! You won (Apple|Banana)\./);
+  await expect(won).toBeVisible({ timeout: 15_000 });
+  const prize = (await won.textContent())!.match(/You won (.+)\.$/)![1];
+
+  // Owner opens management (not prominent: a small link), from a page where they just watch.
+  await owner.goto(url, { waitUntil: "networkidle" });
+  await owner.getByRole("button", { name: "Just look at the results" }).click();
+  await owner.getByRole("button", { name: "Owner management" }).click();
+  const panel = owner.getByRole("dialog", { name: "Owner management" });
+  await expect(panel).toBeVisible();
+
+  // Stage edits: rename, edit one available item, remove another, add one.
+  await panel.getByLabel("Wheel name").fill("Owner wheel v2");
+  const itemInputs = panel.getByRole("textbox", { name: /^Item / });
+  await expect(itemInputs).toHaveCount(2);
+  await itemInputs.first().fill("Golden ticket");
+  await panel.getByRole("button", { name: "Remove", exact: true }).last().click();
+  await panel.getByLabel("New item").fill("Cherry");
+  await panel.getByRole("button", { name: "Add", exact: true }).click();
+  await panel.getByRole("button", { name: "Save changes" }).click();
+
+  // Wrong password: generic message, field cleared, nothing changed.
+  const prompt = owner.getByRole("dialog", { name: "Save changes" });
+  await prompt.getByLabel("Owner password").fill("wrong-password");
+  await prompt.getByRole("button", { name: "Save" }).click();
+  await expect(prompt.getByRole("alert")).toHaveText("Incorrect owner password.");
+  await expect(prompt.getByLabel("Owner password")).toHaveValue("");
+  await expect(prompt.getByLabel("Owner password")).toHaveAttribute("type", "password");
+
+  await prompt.getByLabel("Owner password").fill(OWNER_PW);
+  await prompt.getByRole("button", { name: "Save" }).click();
+  await expect(prompt).toBeHidden();
+  await expect(panel.getByText("Changes saved.")).toBeVisible();
+  await expect(owner.getByRole("heading", { name: "Owner wheel v2", exact: true })).toBeVisible();
+  await expect(panel.getByRole("textbox", { name: /^Item / })).toHaveCount(2);
+  await expect(panel.getByRole("textbox", { name: "Item Golden ticket" })).toBeVisible();
+  await expect(panel.getByRole("textbox", { name: "Item Cherry" })).toBeVisible();
+
+  // Remove Gina's spin.
+  await panel.getByRole("button", { name: "Remove spin" }).click();
+  const removePrompt = owner.getByRole("dialog", { name: "Remove Gina's spin?" });
+  await removePrompt.getByLabel("Owner password").fill(OWNER_PW);
+  await removePrompt.getByRole("button", { name: "Remove spin" }).click();
+  await expect(panel.getByText(`Removed Gina's spin. "${prize}" is back on the wheel.`)).toBeVisible();
+  await expect(panel.getByText("Nobody has spun yet.")).toBeVisible();
+  await panel.getByRole("button", { name: "Close" }).click();
+
+  // Gina's page catches up by polling: her result is gone and the dialog offers her name again.
+  const dialog = guest.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByPlaceholder("Your name")).toHaveValue("Gina");
+  await expect(guest.getByRole("banner")).toContainText("Welcome Gina");
+  await dialog.getByRole("button", { name: "Spin" }).click();
+  await expect(guest.getByText(/Congratulations, Gina! You won/)).toBeVisible({ timeout: 15_000 });
+  await expect(guest.getByText("Results (1)")).toBeVisible();
+
+  await guestCtx.close();
 });

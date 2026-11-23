@@ -1,29 +1,27 @@
 import "server-only";
-import { MongoServerError } from "mongodb";
 import { ObjectId } from "mongodb";
 import { WHEEL_STATUS } from "@/constants/wheel";
-import { getWheelsCollection } from "@/lib/database";
+import { getWheelsCollection, isDuplicateKeyError } from "@/lib/database";
 import { Errors } from "@/lib/errors";
 import { buildWheelItems, generateShareCode } from "@/lib/utils";
 import { shareCodeSchema, type CreateWheelInput } from "@/lib/validation";
 import type { WheelDocument, WheelResponse } from "@/types/wheel";
+import { hashOwnerPassword } from "@/lib/owner-service";
 
 const MAX_CODE_ATTEMPTS = 5;
-
-export function isDuplicateKeyError(error: unknown): boolean {
-  return error instanceof MongoServerError && error.code === 11000;
-}
 
 export async function createWheel(input: CreateWheelInput): Promise<WheelDocument> {
   const wheels = await getWheelsCollection();
   const now = new Date();
   const items = buildWheelItems(input.items);
+  const ownerPasswordHash = await hashOwnerPassword(input.ownerPassword);
 
   for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
     const doc: WheelDocument = {
       _id: new ObjectId(),
       code: generateShareCode(),
       name: input.name,
+      ownerPasswordHash,
       status: WHEEL_STATUS.ACTIVE,
       items,
       participants: [],
@@ -57,12 +55,13 @@ export async function getPublicWheel(code: string): Promise<WheelResponse> {
   return toPublicWheel(wheel);
 }
 
-/** Strips internal fields (_id, requestId) and serialises dates. */
+/** Strips internal fields (_id, ownerPasswordHash) and serialises dates. */
 export function toPublicWheel(wheel: WheelDocument): WheelResponse {
   return {
     code: wheel.code,
     name: wheel.name,
     status: wheel.status,
+    ownerManaged: Boolean(wheel.ownerPasswordHash),
     items: wheel.items.map(({ id, label }) => ({ id, label })),
     participants: wheel.participants.map((p) => ({
       participantId: p.participantId,
@@ -70,6 +69,7 @@ export function toPublicWheel(wheel: WheelDocument): WheelResponse {
       joinedAt: p.joinedAt.toISOString(),
     })),
     results: wheel.results.map((r) => ({
+      requestId: r.requestId,
       participantId: r.participantId,
       participantName: r.participantName,
       itemId: r.itemId,

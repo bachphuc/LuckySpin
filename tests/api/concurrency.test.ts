@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getWheelsCollection } from "@/lib/database";
-import { callGet, callSpin, createTestWheel, spinBody } from "../helpers/api";
+import { OWNER_PASSWORD, callGet, callPatch, callRemoveSpin, callSpin, createTestWheel, spinBody } from "../helpers/api";
 import { startTestDb, stopTestDb } from "../helpers/mongo";
 
 beforeAll(() => startTestDb("luckyspin_concurrency"));
@@ -94,5 +94,96 @@ describe("concurrent spins", () => {
       expect(doc?.status).toBe("COMPLETED");
       expect(new Set(doc?.results.map((r) => r.itemId)).size).toBe(12);
     }
+  });
+});
+
+describe("concurrent owner operations", () => {
+  async function invariants(code: string, allIds: string[]) {
+    const doc = await (await getWheelsCollection()).findOne({ code });
+    if (!doc) throw new Error();
+    const available = doc.items.map((i) => i.id);
+    const awarded = doc.results.map((r) => r.itemId);
+    // Every item is in exactly one place: available or awarded, never both, never twice.
+    expect(new Set([...available, ...awarded]).size).toBe(available.length + awarded.length);
+    expect([...available, ...awarded].sort()).toEqual([...allIds].sort());
+    // One active result per participant, and participants match results.
+    const resultPids = doc.results.map((r) => r.participantId);
+    expect(new Set(resultPids).size).toBe(resultPids.length);
+    expect(doc.participants.map((p) => p.participantId).sort()).toEqual([...resultPids].sort());
+    // Status consistent with remaining items.
+    expect(doc.status).toBe(available.length === 0 ? "COMPLETED" : "ACTIVE");
+    expect(doc.completedAt === null).toBe(doc.status === "ACTIVE");
+    return doc;
+  }
+
+  it("10 concurrent removals of the same result: one succeeds, item restored once", async () => {
+    const code = await createTestWheel(["A", "B", "C"]);
+    const wheel = await callGet(code);
+    if (!wheel.body.success) throw new Error();
+    const allIds = wheel.body.data.items.map((i) => i.id);
+    const req = spinBody("Solo");
+    await callSpin(code, req);
+
+    const responses = await Promise.all(Array.from({ length: 10 }, () => callRemoveSpin(code, req.requestId)));
+    expect(responses.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(responses.filter((r) => r.status === 404)).toHaveLength(9);
+    const doc = await invariants(code, allIds);
+    expect(doc.items).toHaveLength(3);
+  });
+
+  it("spins racing with removals (including the removed participant re-spinning) stay consistent", async () => {
+    const code = await createTestWheel(Array.from({ length: 6 }, (_, i) => `Prize ${i}`));
+    const wheel = await callGet(code);
+    if (!wheel.body.success) throw new Error();
+    const allIds = wheel.body.data.items.map((i) => i.id);
+
+    // 4 people spin first.
+    const early = Array.from({ length: 4 }, (_, i) => spinBody(`Early ${i}`));
+    for (const r of early) expect((await callSpin(code, r)).status).toBe(200);
+
+    // Then, all at once: owner removes those 4 spins, the same 4 people spin again,
+    // and 8 newcomers spin. Only 6 items exist.
+    const ops = [
+      ...early.map((r) => callRemoveSpin(code, r.requestId).then((res) => ({ kind: "remove", res }))),
+      ...early.map((r) =>
+        callSpin(code, spinBody(r.participantName, r.participantId)).then((res) => ({ kind: "respin", res })),
+      ),
+      ...Array.from({ length: 8 }, (_, i) =>
+        callSpin(code, spinBody(`New ${i}`)).then((res) => ({ kind: "new", res })),
+      ),
+    ];
+    const results = await Promise.all(ops);
+    expect(results.filter((r) => r.kind === "remove").every((r) => r.res.status === 200)).toBe(true);
+    for (const r of results) expect([200, 409]).toContain(r.res.status);
+
+    const doc = await invariants(code, allIds);
+    // No participant has more than one active result; nobody "early" kept their old requestId.
+    for (const r of early) expect(doc.results.some((x) => x.requestId === r.requestId)).toBe(false);
+  });
+
+  it("owner edits racing with spins never edit or remove an awarded item", async () => {
+    const code = await createTestWheel(Array.from({ length: 10 }, (_, i) => `I${i}`));
+    const wheel = await callGet(code);
+    if (!wheel.body.success) throw new Error();
+    const ids = wheel.body.data.items.map((i) => i.id);
+
+    const ops = await Promise.all([
+      ...Array.from({ length: 8 }, (_, i) => callSpin(code, spinBody(`S${i}`))),
+      ...ids.slice(0, 5).map((id) => callPatch(code, { ownerPassword: OWNER_PASSWORD, removeItemIds: [id] })),
+      ...ids.slice(5).map((id) => callPatch(code, { ownerPassword: OWNER_PASSWORD, updateItems: [{ id, label: "Edited" }] })),
+    ]);
+    for (const r of ops) expect([200, 409]).toContain(r.status);
+
+    const doc = await (await getWheelsCollection()).findOne({ code });
+    if (!doc) throw new Error();
+    const awarded = doc.results.map((r) => r.itemId);
+    const available = doc.items.map((i) => i.id);
+    expect(new Set([...awarded, ...available]).size).toBe(awarded.length + available.length);
+    // Removed items were never awarded afterwards, and awarded items were never removed.
+    const removeOks = ops.slice(8, 13).map((r, i) => (r.status === 200 ? ids[i] : null)).filter(Boolean);
+    for (const id of removeOks) expect(awarded).not.toContain(id);
+    // Each awarded result's label matches what was in the wheel when it was won.
+    for (const r of doc.results) expect(r.itemLabel === "Edited" || /^I\d$/.test(r.itemLabel)).toBe(true);
+    expect(doc.status).toBe(available.length === 0 ? "COMPLETED" : "ACTIVE");
   });
 });

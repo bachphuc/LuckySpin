@@ -27,6 +27,11 @@ export interface WheelDocument {
   _id: ObjectId;
   code: string;
   name: string;
+  /**
+   * bcrypt hash of the owner password. Never returned by any API.
+   * Optional only because wheels created before owner management don't have one.
+   */
+  ownerPasswordHash?: string;
   status: WheelStatus;
   items: WheelItem[];
   participants: Participant[];
@@ -45,8 +50,9 @@ export interface PublicParticipant {
   joinedAt: string;
 }
 
-/** requestId is intentionally not exposed. */
+/** requestId identifies the result for the owner's "remove spin" action. */
 export interface PublicSpinResult {
+  requestId: string;
   participantId: string;
   participantName: string;
   itemId: string;
@@ -58,6 +64,8 @@ export interface WheelResponse {
   code: string;
   name: string;
   status: WheelStatus;
+  /** false for legacy wheels created without an owner password (cannot be managed). */
+  ownerManaged: boolean;
   items: WheelItem[];
   participants: PublicParticipant[];
   results: PublicSpinResult[];
@@ -86,6 +94,18 @@ export interface SpinResponse {
   status: WheelStatus;
 }
 
+export interface RemoveSpinResponse {
+  removedResult: {
+    requestId: string;
+    participantId: string;
+    participantName: string;
+    itemId: string;
+    itemLabel: string;
+  };
+  remainingItems: number;
+  status: WheelStatus;
+}
+
 export type ApiErrorCode =
   | "WHEEL_NOT_FOUND"
   | "WHEEL_COMPLETED"
@@ -94,6 +114,10 @@ export type ApiErrorCode =
   | "NO_ITEMS_AVAILABLE"
   | "SPIN_CONFLICT"
   | "RATE_LIMITED"
+  | "INVALID_OWNER_PASSWORD"
+  | "OWNER_NOT_CONFIGURED"
+  | "RESULT_NOT_FOUND"
+  | "ITEM_NOT_AVAILABLE"
   | "INTERNAL_SERVER_ERROR";
 
 export type ApiResponse<T> =

@@ -1,7 +1,6 @@
 import "server-only";
-import { getRateLimitsCollection } from "@/lib/database";
+import { getRateLimitsCollection, isDuplicateKeyError } from "@/lib/database";
 import { Errors } from "@/lib/errors";
-import { isDuplicateKeyError } from "@/lib/wheel-service";
 
 export interface RateLimitRule {
   /** Bucket name, e.g. "create" or "spin". */
@@ -13,6 +12,8 @@ export interface RateLimitRule {
 export const RATE_LIMITS = {
   create: { scope: "create", limit: 10, windowMs: 60_000 },
   spin: { scope: "spin", limit: 60, windowMs: 60_000 },
+  /** Any owner management request, per IP. */
+  manage: { scope: "manage", limit: 30, windowMs: 60_000 },
 } satisfies Record<string, RateLimitRule>;
 
 export function getClientIp(request: Request): string {
@@ -41,6 +42,54 @@ export async function enforceRateLimit(request: Request, rule: RateLimitRule): P
     return;
   }
   if (count > rule.limit) throw Errors.rateLimited();
+}
+
+/**
+ * Brute-force protection for owner passwords: only FAILED attempts are counted,
+ * per IP + wheel and per wheel overall, so a legitimate owner isn't locked out
+ * by doing many edits.
+ */
+export const OWNER_FAILURE_LIMITS = {
+  perIp: { scope: "ownerfail-ip", limit: 10, windowMs: 15 * 60_000 },
+  perWheel: { scope: "ownerfail-wheel", limit: 50, windowMs: 15 * 60_000 },
+} satisfies Record<string, RateLimitRule>;
+
+function failureKeys(request: Request, code: string) {
+  const ip = getClientIp(request);
+  return [
+    { rule: OWNER_FAILURE_LIMITS.perIp, id: `${code}:${ip}` },
+    { rule: OWNER_FAILURE_LIMITS.perWheel, id: code },
+  ].map(({ rule, id }) => {
+    const window = Math.floor(Date.now() / rule.windowMs);
+    return {
+      rule,
+      key: `${rule.scope}:${id}:${window}`,
+      expiresAt: new Date((window + 1) * rule.windowMs + 60_000),
+    };
+  });
+}
+
+export async function assertOwnerAttemptsAllowed(request: Request, code: string): Promise<void> {
+  if (process.env.RATE_LIMIT_DISABLED === "1") return;
+  try {
+    const collection = await getRateLimitsCollection();
+    for (const { rule, key } of failureKeys(request, code)) {
+      const doc = await collection.findOne({ _id: key });
+      if ((doc?.count ?? 0) >= rule.limit) throw Errors.rateLimited();
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AppError") throw error;
+    console.error("[luckyspin] owner rate limiter unavailable, allowing request");
+  }
+}
+
+export async function recordOwnerFailure(request: Request, code: string): Promise<void> {
+  if (process.env.RATE_LIMIT_DISABLED === "1") return;
+  try {
+    for (const { key, expiresAt } of failureKeys(request, code)) await increment(key, expiresAt);
+  } catch {
+    console.error("[luckyspin] could not record owner password failure");
+  }
 }
 
 async function increment(key: string, expiresAt: Date): Promise<number> {

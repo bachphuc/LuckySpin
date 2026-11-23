@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getWheelsCollection } from "@/lib/database";
-import { callCreate, callGet, callSpin, createTestWheel, spinBody } from "../helpers/api";
+import { callCreate, callGet, callSpin, createBody, createTestWheel, spinBody } from "../helpers/api";
 import { startTestDb, stopTestDb } from "../helpers/mongo";
 
 beforeAll(() => startTestDb("luckyspin_api"));
@@ -9,7 +9,7 @@ afterAll(() => stopTestDb());
 
 describe("POST /api/wheels", () => {
   it("creates a wheel and returns a share URL", async () => {
-    const { status, body } = await callCreate({ name: "  Lucky Draw ", items: ["Apple", "", "Banana", " Apple "] });
+    const { status, body } = await callCreate(createBody(["Apple", "", "Banana", " Apple "], "  Lucky Draw "));
     expect(status).toBe(201);
     if (!body.success) throw new Error("expected success");
     expect(body.data.name).toBe("Lucky Draw");
@@ -26,12 +26,12 @@ describe("POST /api/wheels", () => {
 
   it("rejects invalid input with 400 INVALID_REQUEST", async () => {
     const cases: unknown[] = [
-      { name: "x", items: ["only one"] },
-      { name: "", items: ["A", "B"] },
-      { name: "x".repeat(81), items: ["A", "B"] },
-      { name: "x", items: ["A", "x".repeat(101)] },
-      { name: "x", items: Array.from({ length: 101 }, (_, i) => `${i}`) },
-      { name: "x" },
+      createBody(["only one"], "x"),
+      createBody(["A", "B"], ""),
+      createBody(["A", "B"], "x".repeat(81)),
+      createBody(["A", "x".repeat(101)], "x"),
+      createBody(Array.from({ length: 101 }, (_, i) => `${i}`), "x"),
+      { name: "x", ownerPassword: "password1", confirmPassword: "password1" },
       "not json{",
     ];
     for (const c of cases) {
@@ -60,6 +60,8 @@ describe("GET /api/wheels/[code]", () => {
     });
     expect(body.data.items).toHaveLength(3);
     expect(body.data).not.toHaveProperty("_id");
+    expect(body.data).not.toHaveProperty("ownerPasswordHash");
+    expect(body.data.ownerManaged).toBe(true);
   });
 
   it("returns 404 for unknown or malformed codes", async () => {
@@ -90,7 +92,7 @@ describe("POST /api/wheels/[code]/spin", () => {
       expect.objectContaining({ participantId: req.participantId, name: "Alice" }),
     ]);
     expect(wheel.body.data.results[0]).toMatchObject({ itemId: body.data.result.itemId, participantName: "Alice" });
-    expect(wheel.body.data.results[0]).not.toHaveProperty("requestId");
+    expect(wheel.body.data.results[0].requestId).toBe(req.requestId);
   });
 
   it("returns 404 for an unknown wheel", async () => {

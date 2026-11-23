@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { OwnerPanel } from "@/components/owner/OwnerPanel";
 import { JoinSpinDialog } from "@/components/participants/JoinSpinDialog";
 import { ParticipantList } from "@/components/participants/ParticipantList";
 import { ResultList } from "@/components/results/ResultList";
@@ -14,6 +15,7 @@ import type { WheelItem, WheelResponse } from "@/types/wheel";
 import { useParticipant } from "./useParticipant";
 
 interface JustWon {
+  requestId: string;
   participantName: string;
   itemLabel: string;
 }
@@ -34,6 +36,11 @@ export function WheelRoom({ code }: { code: string }) {
   const [dialogError, setDialogError] = useState<string | null>(null);
   /** User chose to only watch; the dialog reopens from the main Spin button. */
   const [watching, setWatching] = useState(false);
+  const [ownerOpen, setOwnerOpen] = useState(false);
+  const justWonRef = useRef<JustWon | null>(null);
+  useEffect(() => {
+    justWonRef.current = justWon;
+  }, [justWon]);
   const { participant, saveParticipant } = useParticipant(code);
 
   const wheelRef = useRef<WheelHandle>(null);
@@ -59,6 +66,9 @@ export function WheelRoom({ code }: { code: string }) {
         if (seq < appliedSeq.current || (spinningRef.current && !opts.force)) return;
         appliedSeq.current = seq;
         setWheel(data);
+        // If the owner removed our spin, drop the stale "Congratulations" so we can spin again.
+        const won = justWonRef.current;
+        if (won && !data.results.some((r) => r.requestId === won.requestId)) setJustWon(null);
         setNotFound(false);
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
@@ -113,11 +123,12 @@ export function WheelRoom({ code }: { code: string }) {
     setJustWon(null);
 
     let data;
+    const requestId = newUuid();
     try {
       data = await spinWheel(code, {
         participantId: me.participantId,
         participantName: me.name,
-        requestId: newUuid(),
+        requestId,
       });
     } catch (err) {
       // Keep the dialog open with the name intact; no fake result.
@@ -137,7 +148,7 @@ export function WheelRoom({ code }: { code: string }) {
       if (index >= 0) {
         await wheelRef.current?.stopAt(index);
       }
-      setJustWon({ participantName: data.result.participantName, itemLabel: data.result.itemLabel });
+      setJustWon({ requestId, participantName: data.result.participantName, itemLabel: data.result.itemLabel });
       holdTimer.current = setTimeout(() => setSpinItems(null), RESULT_HOLD_MS);
     } finally {
       spinningRef.current = false;
@@ -239,7 +250,27 @@ export function WheelRoom({ code }: { code: string }) {
           )}
         </section>
       </aside>
-      {showDialog && (
+      {wheel.ownerManaged && (
+        <div className="md:col-start-2">
+          <button
+            type="button"
+            onClick={() => setOwnerOpen(true)}
+            className="text-xs font-medium text-gray-400 underline-offset-2 hover:text-gray-600 hover:underline"
+          >
+            Owner management
+          </button>
+        </div>
+      )}
+
+      {ownerOpen && (
+        <OwnerPanel
+          wheel={wheel}
+          onClose={() => setOwnerOpen(false)}
+          onChanged={() => void refresh({ force: true })}
+        />
+      )}
+
+      {showDialog && !ownerOpen && (
         <JoinSpinDialog
           wheelName={wheel.name}
           remainingItems={wheel.remainingItems}

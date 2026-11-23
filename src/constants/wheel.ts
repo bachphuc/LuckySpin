@@ -8,6 +8,10 @@ export const MAX_ITEMS = 100;
 export const MAX_ITEM_LENGTH = 100;
 export const MAX_WHEEL_NAME_LENGTH = 80;
 export const MAX_PARTICIPANT_NAME_LENGTH = 40;
+export const MIN_OWNER_PASSWORD_LENGTH = 8;
+/** bcrypt only uses the first 72 BYTES, so the limit is checked in UTF-8 bytes too. */
+export const MAX_OWNER_PASSWORD_LENGTH = 72;
+export const BCRYPT_ROUNDS = 12;
 
 /** Public share code: 10 URL-safe base62 characters (~59 bits of entropy). */
 export const SHARE_CODE_LENGTH = 10;

@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { MAX_WHEEL_NAME_LENGTH } from "@/constants/wheel";
 import { ApiClientError, createWheel } from "@/lib/api-client";
+import { validateNewOwnerPassword } from "@/lib/owner-password";
 
 interface ShareWheelFormProps {
   items: string[];
@@ -11,6 +12,8 @@ interface ShareWheelFormProps {
 
 export function ShareWheelForm({ items, onClose }: ShareWheelFormProps) {
   const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
@@ -23,11 +26,16 @@ export function ShareWheelForm({ items, onClose }: ShareWheelFormProps) {
     if (trimmed.length > MAX_WHEEL_NAME_LENGTH) {
       return setError(`Wheel name must be at most ${MAX_WHEEL_NAME_LENGTH} characters.`);
     }
+    const pwError = validateNewOwnerPassword(password, confirm);
+    if (pwError) return setError(pwError);
     setSubmitting(true);
     setError(null);
     try {
-      const data = await createWheel(trimmed, items);
+      const data = await createWheel(trimmed, items, password, confirm);
       setShareUrl(data.shareUrl);
+      // Don't keep the password around once it has been used.
+      setPassword("");
+      setConfirm("");
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not create the wheel.");
     } finally {
@@ -57,7 +65,7 @@ export function ShareWheelForm({ items, onClose }: ShareWheelFormProps) {
       aria-labelledby="share-title"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+      <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-start justify-between">
           <h2 id="share-title" className="text-xl font-bold text-gray-900">
             {shareUrl ? "Your wheel is ready" : "Share this wheel"}
@@ -103,7 +111,33 @@ export function ShareWheelForm({ items, onClose }: ShareWheelFormProps) {
               placeholder="Lucky Draw - November"
               className="rounded-lg border border-gray-300 px-3 py-2 text-base text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
             />
-            <p className="text-xs text-gray-500">{items.length} items will be saved.</p>
+            <label htmlFor="owner-password" className="mt-1 text-sm font-semibold text-gray-700">
+              Owner password
+            </label>
+            <input
+              id="owner-password"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="At least 8 characters"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-base text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+            />
+            <label htmlFor="owner-password-confirm" className="text-sm font-semibold text-gray-700">
+              Confirm password
+            </label>
+            <input
+              id="owner-password-confirm"
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-base text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+            />
+            <p className="text-xs text-gray-500">
+              You&apos;ll need this password to edit the wheel or remove spins. It can&apos;t be recovered.
+              {" "}{items.length} items will be saved.
+            </p>
             {error && (
               <p role="alert" className="text-sm text-red-600">
                 {error}

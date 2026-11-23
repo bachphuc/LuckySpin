@@ -2,6 +2,7 @@ import type {
   ApiErrorCode,
   ApiResponse,
   CreateWheelResponse,
+  RemoveSpinResponse,
   SpinResponse,
   WheelResponse,
 } from "@/types/wheel";
@@ -47,11 +48,33 @@ export function fetchWheel(code: string, signal?: AbortSignal) {
   return request<WheelResponse>(`/api/wheels/${encodeURIComponent(code)}`, { signal });
 }
 
-export function createWheel(name: string, items: string[]) {
+export function createWheel(name: string, items: string[], ownerPassword: string, confirmPassword: string) {
   return request<CreateWheelResponse>("/api/wheels", {
     method: "POST",
-    body: JSON.stringify({ name, items }),
+    body: JSON.stringify({ name, items, ownerPassword, confirmPassword }),
   });
+}
+
+export interface WheelEdit {
+  name?: string;
+  addItems?: string[];
+  updateItems?: { id: string; label: string }[];
+  removeItemIds?: string[];
+}
+
+/** Owner: password is sent with every management request (no stored session). */
+export function updateWheel(code: string, ownerPassword: string, edit: WheelEdit) {
+  return request<WheelResponse>(`/api/wheels/${encodeURIComponent(code)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ ownerPassword, ...edit }),
+  });
+}
+
+export function removeSpin(code: string, requestId: string, ownerPassword: string) {
+  return request<RemoveSpinResponse>(
+    `/api/wheels/${encodeURIComponent(code)}/results/${encodeURIComponent(requestId)}`,
+    { method: "DELETE", body: JSON.stringify({ ownerPassword }) },
+  );
 }
 
 /**

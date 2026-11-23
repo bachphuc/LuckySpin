@@ -102,11 +102,13 @@ export async function spinWheel(code: string, input: SpinRequestInput): Promise<
 
     const updated = await wheels.findOneAndUpdate(filter, buildSpinPipeline(item.id, participant, result, now), {
       returnDocument: "after",
-      projection: { status: 1, items: 1 },
+      projection: { status: 1, items: 1, results: 1 },
     });
 
     if (updated) {
-      return toOutcome(result, updated.items.length, updated.status, false);
+      // The stored label is taken from the document at write time (the owner may have renamed it).
+      const stored = updated.results.find((r) => r.requestId === requestId) ?? result;
+      return toOutcome(stored, updated.items.length, updated.status, false);
     }
     // Lost a race (item taken, participant/request recorded, or wheel completed). Reload.
   }
@@ -131,7 +133,24 @@ function buildSpinPipeline(itemId: string, participant: Participant, result: Spi
           },
         },
         participants: { $concatArrays: ["$participants", [{ $literal: participant }]] },
-        results: { $concatArrays: ["$results", [{ $literal: result }]] },
+        results: {
+          $concatArrays: [
+            "$results",
+            [
+              {
+                $mergeObjects: [
+                  { $literal: result },
+                  {
+                    // Label as it is in the document right now (same atomic write).
+                    itemLabel: {
+                      $arrayElemAt: ["$items.label", { $indexOfArray: ["$items.id", { $literal: itemId }] }],
+                    },
+                  },
+                ],
+              },
+            ],
+          ],
+        },
         updatedAt: { $literal: now },
       },
     },
